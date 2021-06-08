@@ -201,9 +201,10 @@ BEGIN
 	END
 
 	--------------------------------------------------------------------------------------------------------------
-	-- 6. Output
+	-- 6. Clean up and Output
 
-	SELECT @out = @out + ';'
+	SELECT @out = @out + ';' + REPLICATE(@crlf, 2) + 'DROP TABLE #tmpMerge' 
+
 	SELECT @out
 
 END
