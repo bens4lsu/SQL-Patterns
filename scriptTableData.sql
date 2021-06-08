@@ -37,6 +37,8 @@ BEGIN
 		@colListEq nvarchar(max),
 		@colListPrefxd nvarchar(max),
 		@colListEqAll nvarchar(max),
+		@colListMerge nvarchar(max),
+		@colListPK nvarchar(max),
 		@dsql nvarchar(max),
 		@res nvarchar(max),
 		@out nvarchar(max) = '',
@@ -45,7 +47,7 @@ BEGIN
 
 
 	SELECT @tab = '[' + @schemaName + '].[' + @tableName + ']',
-		@rowLimitText = CASE WHEN @rowLimit IS NULL THEN '' ELSE 'TOP ' + CAST(@rowLimit AS nvarchar(20)) END
+		@rowLimitText = CASE WHEN @rowLimit IS NULL OR @rowLimit < 1 THEN '' ELSE 'TOP ' + CAST(@rowLimit AS nvarchar(20)) END
 
 
 	--------------------------------------------------------------------------------------------------------------
@@ -67,33 +69,38 @@ BEGIN
 
 	;WITH cteColumns AS (
 		SELECT c.name AS ColName
-			, i.is_primary_key
+			, c.column_id
+			, MAX(ISNULL(CAST(i.is_primary_key AS TINYINT), 0)) AS is_primary_key
 		FROM sys.columns c 
 			JOIN sys.objects o ON c.object_id = o.object_id 
 			LEFT OUTER JOIN sys.index_columns ic  ON c.object_id = ic.object_id AND c.column_id = ic.column_id
 			LEFT OUTER JOIN sys.indexes i ON ic.object_id = i.object_id AND ic.index_id = i.index_id
 		WHERE o.name = @tableName
+		GROUP BY c.name, c.column_id
 	)
 	
 	, cteCol(list) AS (
 		SELECT SUBSTRING(
-			(SELECT  ', ' + ColName [text()]
+			(SELECT ', ' + ColName [text()]
 			 FROM cteColumns  
+			 ORDER BY column_id
 			 FOR XML PATH('') 
 		), 3, 1000000000)  -- SUBSTRING knocks off the ', ' that comes before the very first row.
 	)
 
 	, cteColRepl(list) AS (
 		SELECT SUBSTRING(
-			(SELECT  ' + '''''','''''' + REPLACE(' + ColName + ', '''''''', '''''''''''')' [text()]
-			 FROM cteColumns  
+			(SELECT  ' + ISNULL('''''''' + (REPLACE(' + ColName + ', '''''''', '''''''''''')) + '''''''', ''null'') + '', '' ' [text()]
+			 FROM cteColumns 
+			 ORDER BY column_id
 			 FOR XML PATH('') 
-		), 9, 1000000000)  -- SUBSTRING knocks off the ', ' that comes before the very first row.
+		), 3, 1000000000)  -- SUBSTRING knocks off the ', ' that comes before the very first row.
 	)
 
 	, cteColSel(list) AS (
 		SELECT ''''' + CAST(' + ColName + ' AS nvarchar) + '''''''' + '', ''' [text()]
 		FROM cteColumns 
+		ORDER BY column_id
 		FOR XML PATH('') 
 	)
 
@@ -101,26 +108,42 @@ BEGIN
 		SELECT  't.' + ColName + ' = c.' + ColName + ' AND ' [text()]
 		FROM cteColumns  
 		WHERE is_primary_key = 1
+		ORDER BY column_id
+		FOR XML PATH('') 
+	)
+
+	, cteColPk(list) AS (
+		SELECT  ColName + ', ' [text()]
+		FROM cteColumns  
+		WHERE is_primary_key = 1
+		ORDER BY column_id
 		FOR XML PATH('') 
 	)
 
 	, cteColEqAll(list) AS (
 		SELECT  't.' + ColName + ' = c.' + ColName + ' , ' [text()]
 		FROM cteColumns  
-		WHERE is_primary_key IS NULL 
+		WHERE is_primary_key = 0 
+		ORDER BY column_id
+		FOR XML PATH('') 
+	)
+
+	, cteColMerge(list) AS (
+		SELECT  ColName + ' nvarchar(1000) , ' [text()]
+		FROM cteColumns  
+		ORDER BY column_id
 		FOR XML PATH('') 
 	)
 
 
-	SELECT @dsql = 'INSERT #tmpCol(txt) SELECT ' + @rowLimitText + ' ''( ''' + SUBSTRING(c4.list                       , 0, LEN(c4.list                       ) - 12) + ''''''''', '''''''''''') + '''''')'' AS txt FROM ' + @tab 
---	SELECT @dsql = 'INSERT #tmpCol(txt) SELECT ' + @rowLimitText + ' ''( ''' + SUBSTRING(REPLACE(c1.list, '''', ''''''), 0, LEN(REPLACE(c1.list, '''', '''''')) - 12) + ' + '''''')'' AS txt FROM ' + @tab 
+	SELECT 
+		@dsql = 'INSERT #tmpCol(txt) SELECT ''('' + ' + @rowLimitText + SUBSTRING(c4.list, 0, LEN(c4.list) - 2 ) + ')'' AS txt FROM ' + @tab 
 		, @colList = c2.list
 		, @colListEq = SUBSTRING(c3.list, 0, LEN(c3.list) - 3)
 		, @colListPrefxd = 'c.' + REPLACE(@colList, ', ', ', c.')
 		, @colListEqAll = SUBSTRING(c5.list, 0, LEN(c5.list) - 1)
-	FROM cteColSel c1, cteCol c2,  cteColEq c3, cteColRepl c4, cteColEqAll c5
-
-	-- SELECT @dsql
+		, @colListMerge = c6.list + ' CONSTRAINT tmpPK_' + REPLACE(CAST(NEWID() AS NVARCHAR(MAX)), '-', '_') + ' PRIMARY KEY (' + SUBSTRING(c7.list, 0, LEN(c7.list) - 0) + ')'
+	FROM cteColSel c1, cteCol c2,  cteColEq c3, cteColRepl c4, cteColEqAll c5, cteColMerge c6, cteColPk c7
 
 	CREATE TABLE #tmpCol (txt nvarchar(max))
 
@@ -131,6 +154,9 @@ BEGIN
 	--------------------------------------------------------------------------------------------------------------
 	-- 3.  Insert part of our MERGE Statement.
 
+	SELECT @out = @out + REPLICATE(@crlf, 2) +
+		'CREATE TABLE #tmpMerge (' + @colListMerge + ')'  + REPLICATE(@crlf, 2)
+
 	;WITH cteAlmost(list) AS (
 		SELECT SUBSTRING(
 			(SELECT  @crlf + ', ' + txt [text()]
@@ -138,19 +164,22 @@ BEGIN
 			 FOR XML PATH('') 
 		), 9, 1000000000)  -- SUBSTRING knocks off the ', ' that comes before the very first row.
 	)
-	SELECT @out = @out + 'WITH cteMerge  AS ( SELECT * FROM (VALUES ' + @crlf 
+
+	SELECT @out = @out + 'INSERT #tmpMerge SELECT * FROM (VALUES ' + @crlf 
 		+ REPLACE(REPLACE(list, '&#x0D;', ''), '&amp;' , '') + @crlf 
-		+ ') x (' + @colList + ') ) 
-		MERGE ' + @tab + ' t USING cteMerge c ON(' + @colListEq + ')
-		WHEN NOT MATCHED BY TARGET THEN
-		INSERT (' + @colList + ')
-		VALUES (' + @colListPrefxd + ')' + @crlf
+		+ ') x (' + @colList + ') ' + REPLICATE(@crlf, 2)
 	FROM cteAlmost
 
 	
+	SELECT @out = @out + '
+		MERGE ' + @tab + ' t USING #tmpMerge c ON(' + @colListEq + ')
+		WHEN NOT MATCHED BY TARGET THEN
+		INSERT (' + @colList + ')
+		VALUES (' + @colListPrefxd + ')' + @crlf
+
 
 	--------------------------------------------------------------------------------------------------------------
-	-- 3. Make the INSERT part of the MERGE statement
+	-- 4. Make the INSERT part of the MERGE statement
 
 	IF ISNULL(@includeUpdate, 0) = 1
 	BEGIN
@@ -161,7 +190,7 @@ BEGIN
 
 
 	--------------------------------------------------------------------------------------------------------------
-	-- 4. Make the DELETE part of the MERGE statement
+	-- 5. Make the DELETE part of the MERGE statement
 
 	IF ISNULL(@includeDelete, 0) = 1
 	BEGIN
@@ -172,7 +201,7 @@ BEGIN
 	END
 
 	--------------------------------------------------------------------------------------------------------------
-	-- 5. Output
+	-- 6. Output
 
 	SELECT @out = @out + ';'
 	SELECT @out
