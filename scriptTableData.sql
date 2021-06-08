@@ -18,7 +18,23 @@ BEGIN
 	/*                                                                                                                        */
 	/*  2021-06-07 - Ben Schultz - Intial version of procedure.                                                               */
 	/*                                                                                                                        */
-	/*                             Usage note:                                                                                */
+	/*                             Usage:                                                                                     */
+	/*                                                                                                                        */
+	/*                                EXEC scriptTableData 'MyTable', 'dbo', 1, 1, null                                       */
+	/*                                                                                                                        */
+	/*                                Parameters 1 & 2, table name and schema name:  for the table whose data you want to     */
+	/*                                    export.                                                                             */
+	/*                                                                                                                        */
+	/*                                Parameter 3, @includeUpdate:  if the target table already has a row with the key for    */
+	/*                                    a particular row, this flag tells the script whether or not to update that row so   */
+	/*                                    that all of the columns match.                                                      */
+	/*                                                                                                                        */
+    /*                                Parameter 4, @includeDelete:  if the target table has a row with a primary key isn't in */
+    /*                                    the source data, this flag indicates whether that row should be deleted or not.     */
+    /*	                                                                                                                      */
+    /*                                Parameter 5, @rowLimit:  will add a "TOP X" to the selection, so that you can just      */
+    /*                                    grab a subset of the source data.                                                   */
+	/*                                                                                                                        */
 	/*                                If the output record is particularly long (either many columns, many rows, or just big  */
 	/*                                data in a column, you may have cut off results when you run from SSMS. You can still    */
 	/*                                get the result set using bcp.  The syntax from a command or powershell prompt is:       */
@@ -26,6 +42,9 @@ BEGIN
 	/*                                bcp "scriptTableData 'MyTable', DEFAULT, DEFAULT, 1, DEFAULT" queryout                  */
 	/*                                    "OUTPUT_FILE_NAME.TXT" -c -S "SERVER_NAME" -d "DATABASE_NAME" -T -e                 */
 	/*                                    "ERROR_FILE_NAME.TXT" -q                                                            */
+	/*                                                                                                                        */
+    /*                               The part that runs is this procedure call:                                               */
+	/*                                                                                                                        */
 	/*                                                                                                                        */
 	/**************************************************************************************************************************/
 
