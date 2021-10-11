@@ -1,14 +1,22 @@
+USE [Provider_Enrollment_DB]
+GO
+
+/****** Object:  StoredProcedure [dbo].[scriptTableData]    Script Date: 9/2/2021 10:23:23 AM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
 
 
-CREATE OR ALTER PROCEDURE dbo.scriptTableData (
+
+CREATE OR ALTER PROCEDURE [dbo].[scriptTableData] (
     @tableName nvarchar(400),
     @schemaName nvarchar(100) ='dbo',
     @includeUpdate bit = 1,
     @includeDelete bit = 0,
-    @rowLimit int = NULL
-
-    -- Future:
-    -- @whereClause @nvarchar(max) = NULL
+    @rowLimit int = NULL,
+	@whereClause nvarchar(max) = NULL
 
 )
 AS
@@ -45,6 +53,15 @@ BEGIN
     /*                                                                                                                        */
     /*                               The part that runs is this procedure call:                                               */
     /*                                                                                                                        */
+    /*  2021-07-09 - Ben Schultz - Bracketed column names so this can work if there's a space in the name.                    */
+	/*                                                                                                                        */
+	/*  2021-09-02 - Ben Schultz - Added optional WHERE clause that will be used to filter the rows included in the           */
+	/*                             statement that gets generated.  Be careful when using this with the @delete option, as     */
+	/*                             that will cause this to generate a script that deletes any rows that were excluded by      */
+	/*                             the WHERE.                                                                                 */
+	/*                                                                                                                        */
+	/* 2021-09016 - Ben Schultz - Handle a tab character after it goes through the pass that converts it to html &#x07;       */
+	/*                            I probably need to spend some time and do a lot of these types of substitutions.            */
     /*                                                                                                                        */
     /**************************************************************************************************************************/
 
@@ -87,7 +104,7 @@ BEGIN
     -- 2.  Create all of the column lists that we're going to need.
 
     ;WITH cteColumns AS (
-        SELECT c.name AS ColName
+        SELECT '[' + c.name + ']' AS ColName
             , c.column_id
             , MAX(ISNULL(CAST(i.is_primary_key AS TINYINT), 0)) AS is_primary_key
         FROM sys.columns c 
@@ -164,14 +181,18 @@ BEGIN
         , @colListMerge = c6.list + ' CONSTRAINT tmpPK_' + REPLACE(CAST(NEWID() AS NVARCHAR(MAX)), '-', '_') + ' PRIMARY KEY (' + SUBSTRING(c7.list, 0, LEN(c7.list) - 0) + ')'
     FROM cteColSel c1, cteCol c2,  cteColEq c3, cteColRepl c4, cteColEqAll c5, cteColMerge c6, cteColPk c7
 
+	IF @whereClause IS NOT NULL
+		SELECT @dsql = @dsql + ' WHERE ' + @whereClause
+
     CREATE TABLE #tmpCol (txt nvarchar(max))
 
-    EXEC sp_executesql @dsql
+   	EXEC sp_executesql @dsql
 
 
     
     --------------------------------------------------------------------------------------------------------------
-    -- 3.  Insert part of our MERGE Statement.
+    -- 3.  Create the part of our statement where we create a temp table and put in the values that
+	--     we want to transfer.
 
     SELECT @out = @out + REPLICATE(@crlf, 2) +
         'CREATE TABLE #tmpMerge (' + @colListMerge + ')'  + REPLICATE(@crlf, 2)
@@ -185,11 +206,13 @@ BEGIN
     )
 
     SELECT @out = @out + 'INSERT #tmpMerge SELECT * FROM (VALUES ' + @crlf 
-        + REPLACE(REPLACE(list, '&#x0D;', ''), '&amp;' , '') + @crlf 
+        + REPLACE(REPLACE(REPLACE(list, '&#x0D;', ''), '&amp;' , ''), '&#x07;', char(07)) + @crlf  
         + ') x (' + @colList + ') ' + REPLICATE(@crlf, 2)
     FROM cteAlmost
 
-    
+    --------------------------------------------------------------------------------------------------------------
+    -- 3.  Start the MERGE statement and add the INSERT clause
+  
     SELECT @out = @out + '
         MERGE ' + @tab + ' t USING #tmpMerge c ON(' + @colListEq + ')
         WHEN NOT MATCHED BY TARGET THEN
@@ -198,7 +221,7 @@ BEGIN
 
 
     --------------------------------------------------------------------------------------------------------------
-    -- 4. Make the INSERT part of the MERGE statement
+    -- 4. Make the UPDATE part of the MERGE statement
 
     IF ISNULL(@includeUpdate, 0) = 1
     BEGIN
@@ -224,8 +247,14 @@ BEGIN
 
     SELECT @out = @out + ';' + REPLICATE(@crlf, 2) + 'DROP TABLE #tmpMerge' 
 
+	IF @hasIdentity = 1
+        SELECT @out = @out + REPLICATE(@crlf, 2) + 'GO' + REPLICATE(@crlf, 2) + 'SET IDENTITY_INSERT ' + @tab + ' OFF' + @crlf + 'GO' + REPLICATE(@crlf, 2)
+
+
     SELECT @out
 
 END
 
 GO
+
+
