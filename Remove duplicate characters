@@ -1,0 +1,14 @@
+declare @str nvarchar(500) = '@@@##.##'
+
+; WITH cteTally AS (
+	SELECT ROW_NUMBER() OVER (PARTITION BY (SELECT 1) ORDER BY column_id) AS N
+	FROM sys.columns
+)
+, cteAllCharacters AS (
+	SELECT N, SUBSTRING(@str, N, 1) AS CH, LAG(SUBSTRING(@str, N, 1)) OVER (ORDER BY N) AS CHLAG
+	FROM cteTally
+	WHERE N < LEN(@str)
+)
+SELECT STRING_AGG(CH, '')
+FROM cteAllCharacters
+WHERE CHLAG IS NULL OR CHLAG != CH OR CH NOT IN ('@', '#')
