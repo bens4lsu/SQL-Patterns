@@ -1,8 +1,8 @@
 declare @str nvarchar(500) = '@@@##.##'
 
 ; WITH cteTally AS (
-	SELECT ROW_NUMBER() OVER (PARTITION BY (SELECT 1) ORDER BY column_id) AS N
-	FROM sys.columns
+	SELECT ROW_NUMBER() OVER (PARTITION BY (SELECT 1) ORDER BY (SELECT 1)) AS N
+	FROM sys.columns c1 cross join sys.columns c2
 )
 , cteAllCharacters AS (
 	SELECT N, SUBSTRING(@str, N, 1) AS CH, LAG(SUBSTRING(@str, N, 1)) OVER (ORDER BY N) AS CHLAG
